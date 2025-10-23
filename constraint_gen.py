@@ -8,7 +8,12 @@ function_dict = {
     'relu': lambda x: np.maximum(0, x),
     'exp': np.exp,
     'n_exp': lambda x: np.exp(-x),
-    'sigmoid': lambda x: 40 / (1 + np.exp(-x))
+    'sigmoid': lambda x: 1 / (1 + np.exp(-x)),
+    'test': lambda x: 2 * x if x < 1 else x + 1,
+    # 'test2': lambda x: -17.33 * x -16.273 if x < -1.1 else  0.07 * x + 2.867,
+    'test2': lambda x: -16 * x -8.5 if x < -2.0 else  0.125 * x + 2.0,
+    'test3': lambda x: -17.33 * x - 16.273 if x < -1.1 else (0.07 * x + 2.867 if x < 0.21 else 66.2*x -11.0203),
+    'linear': lambda x: 4.27 * x + 19.35,
 }
 
 def binary_search(func, target, low, high, tol=1e-5, max_iter=100):
@@ -51,6 +56,7 @@ def derivative_based_sample(func, exam_range, num_sample, input_type, output_typ
     for i in range(expanded_num_seg):
         p = start_p + i * step_size
         der = compute_second_derivative(func, p)
+        der = abs(der)
         examine_points.append([p, abs(der), func(p)])
     # sort by derivative value
     examine_points = sorted(examine_points, key=lambda x: x[1], reverse=True)
@@ -97,28 +103,39 @@ def search_valid_input_range(func, input_type, output_type):
 def constraint_gen(func_name, input_type, output_type, gen_strategy):
     func = function_dict[func_name]
     valid_input_range = search_valid_input_range(func, input_type, output_type)
+    if (func_name in ['sigmoid', 'test', 'test2', 'test3', 'linear']):
+        valid_input_range = (-5, 5)
     print(f"Valid input range for {func_name}: {valid_input_range}")
     print(f"Encoded samples for {func_name}:")
 
     if gen_strategy == 'uniform_linear':
-        samples_encoded = uniform_sample(func, valid_input_range, 40, input_type, output_type)
-        for sample in samples_encoded:
-            t = sh.sygus_eq(f"(f {sh.sygus_binary_str(sample[0])})", sh.sygus_binary_str(sample[1]))
-            print(sh.sygus_constraint_wrap(t))
+        samples_encoded = uniform_sample(func, valid_input_range, 4, input_type, output_type)
     elif gen_strategy == 'derivative_based':
-        samples_encoded = derivative_based_sample(func, valid_input_range, 10, input_type, output_type)
-        for sample in samples_encoded:
-            t = sh.sygus_eq(f"(f {sh.sygus_binary_str(sample[0])})", sh.sygus_binary_str(sample[1]))
-            print(sh.sygus_constraint_wrap(t))
+        samples_encoded = derivative_based_sample(func, valid_input_range, 6, input_type, output_type)
+    else:
+        raise ValueError(f"Unsupported generation strategy: {gen_strategy}")
+    
+    for sample in samples_encoded:
+        # t = sh.sygus_eq(f"(f {sh.sygus_binary_str(sample[0])})", sh.sygus_binary_str(sample[1]))
+        # t = sh.sygus_lt(f"(f {sh.sygus_binary_str(sample[0])})", sh.sygus_binary_str(sample[1]))
+        sample_v = output_type.decode_value(sample[1])
+        # do not use scientific notation
+        sample_v = f"{sample_v:.16f}"
+        sample_input = input_type.decode_value(sample[0])
+        sample_input = f"{sample_input:.16f}"
+        t = f"(and {sh.sygus_example_constraint_wrap_bounded(sample_input, sample_v, 0.5)} {sh.sygus_example_constraint_wrap_bounded(sample_input, sample_v, 0.5, rev=True)})"
+        print(sh.sygus_constraint_wrap(t))
 
 def __main__():
-    input_type = tc.Q_Types(signed=True, mantissa_bits=7, exponent_bits=0)
-    output_type = tc.Q_Types(signed=True, mantissa_bits=7, exponent_bits=0)
+    input_type = tc.Q_Types(signed=True, mantissa_bits=23, exponent_bits=8)
+    output_type = tc.Q_Types(signed=True, mantissa_bits=23, exponent_bits=8)
     # constraint_gen('sin', input_type, output_type, 'uniform_linear')
     # constraint_gen('relu', input_type, output_type, 'uniform_linear')
     # constraint_gen('exp', input_type, output_type, 'uniform_linear')
     # constraint_gen('sigmoid', input_type, output_type, 'uniform_linear')
-    constraint_gen('sigmoid', input_type, output_type, 'derivative_based')
+    # constraint_gen('sigmoid', input_type, output_type, 'derivative_based')
+    # constraint_gen('sigmoid', input_type, output_type, 'derivative_based')
+    constraint_gen('test2', input_type, output_type, 'uniform_linear')
 
 if __name__ == "__main__":
     __main__()

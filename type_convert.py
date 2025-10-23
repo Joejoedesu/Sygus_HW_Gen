@@ -1,4 +1,5 @@
 import numpy as np
+import matplotlib.pyplot as plt
 
 def int2binary(total_bits: int, value: int) -> str:
     """Convert signed int to binary string (two's complement)."""
@@ -80,6 +81,29 @@ def hex2binary(hex_str: str, total_bits: int) -> str:
     bin_length = total_bits
     bin_value = format(int(hex_str, 16), f'0{bin_length}b')  # Convert hex to int, then to binary
     return bin_value[-total_bits:]  # Ensure the binary string is of the correct length
+
+def to_number(str_v: str) -> float:
+    try:
+        return float(str_v)
+    except ValueError:
+        return None
+
+def plot_ulp(q_type):
+    #going from 10-10 to 10^10, log scale
+    x_vals = np.logspace(-10, 10, num=1000)
+    ulp_vals = []
+    for x in x_vals:
+        bin_str, stored_value, error = q_type.encode_value(x)
+        exp_val = binary2int(bin_str[1:1 + q_type.exponent_bits], signed=False) - ((1 << (q_type.exponent_bits - 1)) - 1)
+        ulp = 2 ** (exp_val - q_type.mantissa_bits)
+        ulp_vals.append(ulp)
+    plt.figure(figsize=(10, 6))
+    plt.loglog(x_vals, ulp_vals)
+    plt.xlabel('Value')
+    plt.ylabel('ULP')
+    plt.title('ULP vs Value')
+    plt.grid(True, which="both", ls="--")
+    plt.show()
 
 # SMT op instantiation
 def bv(val, size):
@@ -233,3 +257,22 @@ class Q_inst:
     def __init__(self, q_type: Q_Types, value):
         self.q_type = q_type
         self.binary_str, self.stored_value, self.error = q_type.encode_value(value)
+
+# fp32 = Q_Types(signed=True, mantissa_bits=23, exponent_bits=8)
+# plot_ulp(fp32)
+
+# import random
+
+# # Generate 10 random x values (you can choose the range)
+# xs = [random.uniform(-10, 10) for _ in range(10)]
+
+# # Compute f = 2x + 5 + delta, where delta ∈ [-0.1, 0.1]
+# points = []
+# for x in xs:
+#     delta = random.uniform(-0.1, 0.1)
+#     f = 2 * x + 5 + delta
+#     points.append((x, f))
+
+# # Print the generated (x, f) pairs
+# for x, f in points:
+#     print(f"x = {x:.3f}, f = {f:.3f}")

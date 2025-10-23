@@ -1,0 +1,15 @@
+(set-logic ALL)
+(set-option :produce-models true)
+
+(define-fun f ((x (_ FloatingPoint 8 24))) (_ FloatingPoint 8 24)
+    (ite (fp.leq x ((_ to_fp 8 24) RNE -1.6666666269302368)) 
+    (fp.add roundNearestTiesToEven (fp.mul roundNearestTiesToEven x ((_ to_fp 8 24) (concat (concat #b1 (bvadd #b01111111 #b00000100)) #b01010000000000000000000))) ((_ to_fp 8 24) (concat (concat #b1 (bvadd #b01111111 #b00000101)) (concat (concat #b0000 #b11) #b00000000000000000))))
+    (fp.add roundNearestTiesToEven (fp.mul roundNearestTiesToEven x ((_ to_fp 8 24) (concat (concat #b0 (bvadd #b01111111 #b11111110)) #b00000000000000000000000))) ((_ to_fp 8 24) (concat (concat #b0 #b01111111) #b01010000000000000000000))))
+)
+
+(assert (and (fp.lt (fp.neg ((_ to_fp 8 24) RNE 0.5)) (fp.sub RNE (f ((_ to_fp 8 24) RNE -5.0000000000000000)) ((_ to_fp 8 24) RNE 71.5000000000000000))) (fp.lt (fp.sub RNE (f ((_ to_fp 8 24) RNE -5.0000000000000000)) ((_ to_fp 8 24) RNE 71.5000000000000000)) ((_ to_fp 8 24) RNE 0.5))))
+(assert (and (fp.lt (fp.neg ((_ to_fp 8 24) RNE 0.5)) (fp.sub RNE (f ((_ to_fp 8 24) RNE -1.6666666269302368)) ((_ to_fp 8 24) RNE 1.7916666269302368))) (fp.lt (fp.sub RNE (f ((_ to_fp 8 24) RNE -1.6666666269302368)) ((_ to_fp 8 24) RNE 1.7916666269302368)) ((_ to_fp 8 24) RNE 0.5))))
+(assert (and (fp.lt (fp.neg ((_ to_fp 8 24) RNE 0.5)) (fp.sub RNE (f ((_ to_fp 8 24) RNE 1.6666666269302368)) ((_ to_fp 8 24) RNE 2.2083332538604736))) (fp.lt (fp.sub RNE (f ((_ to_fp 8 24) RNE 1.6666666269302368)) ((_ to_fp 8 24) RNE 2.2083332538604736)) ((_ to_fp 8 24) RNE 0.5))))
+(assert (and (fp.lt (fp.neg ((_ to_fp 8 24) RNE 0.5)) (fp.sub RNE (f ((_ to_fp 8 24) RNE 5.0000000000000000)) ((_ to_fp 8 24) RNE 2.6250000000000000))) (fp.lt (fp.sub RNE (f ((_ to_fp 8 24) RNE 5.0000000000000000)) ((_ to_fp 8 24) RNE 2.6250000000000000)) ((_ to_fp 8 24) RNE 0.5))))
+(check-sat)
+(get-model)

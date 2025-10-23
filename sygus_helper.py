@@ -11,11 +11,29 @@ def sygus_leq(l, r, thoery='BV'):
         return f"(bvsle {l} {r})"
     elif thoery == 'FP':
         return f"(fp.leq {l} {r})"
+    elif thoery == 'NRA':
+        return f"(<= {l} {r})"
+    else:
+        raise ValueError(f"Unsupported theory: {thoery}")
+    
+def sygus_lt(l, r, thoery='BV'):
+    if thoery == 'BV':
+        return f"(bvslt {l} {r})"
+    elif thoery == 'FP':
+        return f"(fp.lt {l} {r})"
+    elif thoery == 'NRA':
+        return f"(< {l} {r})"
     else:
         raise ValueError(f"Unsupported theory: {thoery}")
 
 def sygus_constraint_wrap(expr: str):
     return f"(constraint {expr})"
+
+def sygus_example_constraint_wrap_bounded(input, target, bound, rev=False): # currently only support fp
+    if rev:
+        return f"(fp.lt (fp.sub RNE (f ((_ to_fp 8 24) RNE {input})) ((_ to_fp 8 24) RNE {target})) ((_ to_fp 8 24) RNE {bound}))"
+    else:
+        return f"(fp.lt (fp.neg ((_ to_fp 8 24) RNE {bound})) (fp.sub RNE (f ((_ to_fp 8 24) RNE {input})) ((_ to_fp 8 24) RNE {target})))"
 
 def sygus_binary_str(seq: str):
     return f"#b{seq}"
@@ -33,10 +51,18 @@ def sygus_format_expr(expr: str, lines: list, level: int =0):
             l = '  ' * level + expr.value()
             print(l)
             lines.append(l)
+    elif isinstance(expr, (int, float)):
+        l = '  ' * level + str(expr)
+        print(l)
+        lines.append(l)
     elif isinstance(expr, list):
         op = expr[0]
-        if isinstance(op, sexpdata.Symbol):
-            op_value = op.value()
+        composed_op = isinstance(op, list) and isinstance(op[0], sexpdata.Symbol) and op[0].value() == '_'
+        if isinstance(op, sexpdata.Symbol) or composed_op:
+            if composed_op:
+                op_value = ' '.join([o.value() if isinstance(o, sexpdata.Symbol) else str(o) for o in op[1:]])
+            else:
+                op_value = op.value()
             if op_value == 'let':
                 let_val = expr[1][0]
                 let_name = let_val[0].value()
@@ -67,8 +93,10 @@ def sygus_format_expr(expr: str, lines: list, level: int =0):
                     sygus_format_expr(sub_expr, lines, level + 1)
         else:
             raise ValueError(f"Invalid operation: {op}")
+    else:
+        raise ValueError(f"Invalid expression type: {expr}")
 
-def sygus_eval_expr(expr: str, env_l: dict): # it operates in the space of string
+def sygus_eval_expr(expr, env_l: dict): # it operates in the space of string
     if isinstance(expr, sexpdata.Symbol):
         v = expr.value()
         if v.startswith('#b'):
@@ -81,6 +109,8 @@ def sygus_eval_expr(expr: str, env_l: dict): # it operates in the space of strin
             return env_l[v]
         else:
             raise ValueError(f"Unknown symbol: {v}")
+    elif isinstance(expr, (int, float)):
+        return expr
     elif isinstance(expr, list):
         op = expr[0]
         if isinstance(op, sexpdata.Symbol):
@@ -95,7 +125,7 @@ def sygus_eval_expr(expr: str, env_l: dict): # it operates in the space of strin
                 env_l[let_name] = let_evaluated
                 # print(f"Let binding: {let_name} = {let_evaluated}")
                 return sygus_eval_expr(expr[2], env_l)
-                
+            # BV operations
             elif op_value == 'bvadd':
                 return tc.bvadd(sygus_eval_expr(expr[1], env_l), sygus_eval_expr(expr[2], env_l))
             elif op_value == 'bvshl':
@@ -110,6 +140,19 @@ def sygus_eval_expr(expr: str, env_l: dict): # it operates in the space of strin
                 return tc.bvor(sygus_eval_expr(expr[1], env_l), sygus_eval_expr(expr[2], env_l))
             elif op_value == 'bvneg':
                 return tc.bvneg(sygus_eval_expr(expr[1], env_l))
+            # FP operations
+            elif op_value == 'fp.add':
+                return sygus_eval_expr(expr[2], env_l) + sygus_eval_expr(expr[3], env_l)
+            elif op_value == 'fp.sub':
+                return sygus_eval_expr(expr[2], env_l) - sygus_eval_expr(expr[3], env_l)
+            elif op_value == 'fp.abs':
+                return abs(sygus_eval_expr(expr[1], env_l))
+            elif op_value == 'fp.mul':
+                return sygus_eval_expr(expr[2], env_l) * sygus_eval_expr(expr[3], env_l)
+            elif op_value == 'fp.leq':
+                return sygus_eval_expr(expr[1], env_l) <= sygus_eval_expr(expr[2], env_l)
+            elif op_value == 'fp.div':
+                return sygus_eval_expr(expr[2], env_l) / sygus_eval_expr(expr[3], env_l)
             elif op_value == 'ite':
                 return tc.ite(sygus_eval_expr(expr[1], env_l),
                               sygus_eval_expr(expr[2], env_l),
@@ -118,6 +161,11 @@ def sygus_eval_expr(expr: str, env_l: dict): # it operates in the space of strin
                 return sygus_eval_expr(expr[1], env_l) == sygus_eval_expr(expr[2], env_l)
             else:
                 raise ValueError(f"Unsupported operation: {op_value}")
+        elif isinstance(op, list):
+            assert isinstance(op[0], sexpdata.Symbol) and op[0].value() == '_'
+            t_op = op[1].value()
+            if t_op == 'to_fp':
+                return sygus_eval_expr(expr[-1], env_l)
         else:
             raise ValueError(f"Invalid operation: {op}")
 
@@ -134,22 +182,24 @@ def sygus_func_extraction(sygus_output: str):
     def f(x: str) -> str:
         env = {'x': x}
         result = sygus_eval_expr(func_gen, env)
-        print(result)
         return result
-    f('00000011')
     return f
 
-def sygus_func_plot(sygus_output: str):
+def sygus_func_plot(sygus_output: str, bv=True):
     f = sygus_func_extraction(sygus_output)
-    # plot the range of -10 to 10 with step 1
+    # plot the range of -20, 20 with step 0.1
     v = []
-    for i in range(-10, 11):
-        in_bin = tc.int2binary(8, i & 0xFF)
-        out_bin = f(in_bin)
-        out_int = tc.binary2int(out_bin, signed=False)
-        print(f"Input: {i}, Output: {out_int}")
-        v.append(out_int)
-    plt.plot(range(-10, 11), v)
+    for i in np.arange(-20, 20, 0.1):
+        if bv:
+            bin_input = tc.int2binary(8, int(i))
+            out_bin = f(bin_input)
+            out = tc.binary2int(out_bin, signed=True)
+        else:
+            out = f(i)
+
+        # print(f"Input: {i}, Output: {out}")
+        v.append(out)
+    plt.plot(np.arange(-20, 20, 0.1), v)
     plt.xlabel('Input')
     plt.ylabel('Output')
     plt.title('Sygus Function Plot')
@@ -161,8 +211,18 @@ def __main__():
     # s = "(define-fun f ((x (_ BitVec 8))) (_ BitVec 8) (ite (bvslt #b00000001 x) (ite (bvslt x (bvshl #b00000001 #b00000010)) (bvshl (bvadd x (bvshl #b00000010 x)) #b00000001) (bvshl (bvadd #b00000010 (bvshl #b00000010 #b00000010)) #b00000010)) (bvlshr #b00000001 (bvadd #b00000010 (bvadd #b00000010 x)))))"
     # sygus_func_extraction(s)
 
-    s = "(define-fun f ((x (_ BitVec 8))) (_ BitVec 8) (let ((_let_1 (bvshl x x))) (let ((_let_2 (bvshl #b00000001 #b00000010))) (let ((_let_3 (bvadd #b00000001 #b00000010))) (let ((_let_4 (bvadd #b00000010 x))) (let ((_let_5 (bvadd #b00000001 x))) (ite (bvslt #b00000001 (bvadd #b00000010 _let_1)) (ite (bvslt #b00000001 (ite (bvslt #b00000010 x) (bvlshr x #b00000001) #b00000010)) (ite (bvslt #b00000001 (ite (= #b00000010 x) #b00000001 #b00000010)) (ite (= #b00000000 (bvlshr #b00000010 x)) (ite (= #b00000000 (bvlshr #b00000001 _let_5)) (ite (= #b00000000 (bvlshr #b00000001 _let_4)) (ite (bvslt x _let_5) (bvshl #b00000001 (bvadd #b00000010 _let_4)) (bvshl (bvadd #b00000010 (bvshl #b00000010 #b00000010)) #b00000010)) (bvand x (bvadd #b00000010 _let_2))) (bvlshr x (bvshl _let_4 #b00000010))) (bvadd #b00000001 (bvadd #b00000010 (bvshl _let_3 _let_3)))) (bvadd #b00000001 (bvor #b00000010 (bvadd x (bvshl #b00000010 _let_2))))) (bvadd (bvshl #b00000001 x) (bvlshr (bvneg #b00000001) x))) (bvlshr _let_1 #b00000010))))))))"
-    # sygus_func_plot(s)
+    # s = "(define-fun f ((x (_ BitVec 8))) (_ BitVec 8) (let ((_let_1 (bvshl x x))) (let ((_let_2 (bvshl #b00000001 #b00000010))) (let ((_let_3 (bvadd #b00000001 #b00000010))) (let ((_let_4 (bvadd #b00000010 x))) (let ((_let_5 (bvadd #b00000001 x))) (ite (bvslt #b00000001 (bvadd #b00000010 _let_1)) (ite (bvslt #b00000001 (ite (bvslt #b00000010 x) (bvlshr x #b00000001) #b00000010)) (ite (bvslt #b00000001 (ite (= #b00000010 x) #b00000001 #b00000010)) (ite (= #b00000000 (bvlshr #b00000010 x)) (ite (= #b00000000 (bvlshr #b00000001 _let_5)) (ite (= #b00000000 (bvlshr #b00000001 _let_4)) (ite (bvslt x _let_5) (bvshl #b00000001 (bvadd #b00000010 _let_4)) (bvshl (bvadd #b00000010 (bvshl #b00000010 #b00000010)) #b00000010)) (bvand x (bvadd #b00000010 _let_2))) (bvlshr x (bvshl _let_4 #b00000010))) (bvadd #b00000001 (bvadd #b00000010 (bvshl _let_3 _let_3)))) (bvadd #b00000001 (bvor #b00000010 (bvadd x (bvshl #b00000010 _let_2))))) (bvadd (bvshl #b00000001 x) (bvlshr (bvneg #b00000001) x))) (bvlshr _let_1 #b00000010))))))))"
+    # s = "(define-fun f ((x (_ FloatingPoint 8 24))) (_ FloatingPoint 8 24) (let ((_let_1 ((_ to_fp 8 24) roundNearestTiesToEven 1.0))) (fp.add roundNearestTiesToEven _let_1 (fp.add roundNearestTiesToEven _let_1 x))))"
+    # s = "(define-fun f ((x (_ FloatingPoint 8 24))) (_ FloatingPoint 8 24) (fp.add roundNearestTiesToEven (fp.mul roundNearestTiesToEven (fp.add roundNearestTiesToEven x (fp.add roundNearestTiesToEven ((_ to_fp 8 24) roundNearestTiesToEven 1.0) ((_ to_fp 8 24) roundNearestTiesToEven 1.0))) (fp.add roundNearestTiesToEven ((_ to_fp 8 24) roundNearestTiesToEven 1.0) ((_ to_fp 8 24) roundNearestTiesToEven 1.0))) ((_ to_fp 8 24) roundNearestTiesToEven 1.0)))"
+    # s = "(define-fun f ((x (_ FloatingPoint 8 24))) (_ FloatingPoint 8 24) (ite (fp.leq x ((_ to_fp 8 24) roundNearestTiesToEven 1.0)) (fp.mul roundNearestTiesToEven x (fp.add roundNearestTiesToEven ((_ to_fp 8 24) roundNearestTiesToEven 1.0) ((_ to_fp 8 24) roundNearestTiesToEven 1.0))) (fp.add roundNearestTiesToEven x ((_ to_fp 8 24) roundNearestTiesToEven 1.0))))"
+    # 0.5 error
+    # s = "(define-fun f ((x (_ FloatingPoint 8 24))) (_ FloatingPoint 8 24) (fp.mul roundNearestTiesToEven (fp.add roundNearestTiesToEven (fp.mul roundNearestTiesToEven x (fp.div roundNearestTiesToEven ((_ to_fp 8 24) roundNearestTiesToEven 1.0) (fp.add roundNearestTiesToEven ((_ to_fp 8 24) roundNearestTiesToEven 1.0) (fp.add roundNearestTiesToEven ((_ to_fp 8 24) roundNearestTiesToEven 1.0) ((_ to_fp 8 24) roundNearestTiesToEven 1.0))))) ((_ to_fp 8 24) roundNearestTiesToEven 1.0)) (fp.div roundNearestTiesToEven ((_ to_fp 8 24) roundNearestTiesToEven 1.0) (fp.add roundNearestTiesToEven ((_ to_fp 8 24) roundNearestTiesToEven 1.0) ((_ to_fp 8 24) roundNearestTiesToEven 1.0)))))"
+    # 0.2 error
+    s = "(define-fun f ((x (_ FloatingPoint 8 24))) (_ FloatingPoint 8 24) (fp.mul roundNearestTiesToEven (fp.add roundNearestTiesToEven (fp.mul roundNearestTiesToEven x (fp.div roundNearestTiesToEven ((_ to_fp 8 24) roundNearestTiesToEven 1.0) (fp.add roundNearestTiesToEven ((_ to_fp 8 24) roundNearestTiesToEven 1.0) (fp.add roundNearestTiesToEven (fp.add roundNearestTiesToEven ((_ to_fp 8 24) roundNearestTiesToEven 1.0) ((_ to_fp 8 24) roundNearestTiesToEven 1.0)) ((_ to_fp 8 24) roundNearestTiesToEven 1.0))))) ((_ to_fp 8 24) roundNearestTiesToEven 1.0)) (fp.div roundNearestTiesToEven ((_ to_fp 8 24) roundNearestTiesToEven 1.0) (fp.add roundNearestTiesToEven ((_ to_fp 8 24) roundNearestTiesToEven 1.0) ((_ to_fp 8 24) roundNearestTiesToEven 1.0)))))"
+    # 0.2 slower
+    # s = "(define-fun f ((x (_ FloatingPoint 8 24))) (_ FloatingPoint 8 24) (fp.add roundNearestTiesToEven (fp.div roundNearestTiesToEven ((_ to_fp 8 24) roundNearestTiesToEven 1.0) (fp.add roundNearestTiesToEven ((_ to_fp 8 24) roundNearestTiesToEven 1.0) ((_ to_fp 8 24) roundNearestTiesToEven 1.0))) (fp.mul roundNearestTiesToEven x (fp.div roundNearestTiesToEven (fp.div roundNearestTiesToEven ((_ to_fp 8 24) roundNearestTiesToEven 1.0) (fp.add roundNearestTiesToEven (fp.add roundNearestTiesToEven ((_ to_fp 8 24) roundNearestTiesToEven 1.0) ((_ to_fp 8 24) roundNearestTiesToEven 1.0)) ((_ to_fp 8 24) roundNearestTiesToEven 1.0))) (fp.add roundNearestTiesToEven (fp.add roundNearestTiesToEven ((_ to_fp 8 24) roundNearestTiesToEven 1.0) ((_ to_fp 8 24) roundNearestTiesToEven 1.0)) ((_ to_fp 8 24) roundNearestTiesToEven 1.0))))))"
+
+    sygus_func_plot(s, bv=False)
     parsed = sexpdata.loads(s)
     inputs = parsed[2]
     output_type = parsed[3]
